@@ -1,11 +1,12 @@
 ﻿using Microsoft.AspNetCore.Mvc;
+using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
 using ProductManagementAPI.Data;
 using ProductManagementAPI.Models;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
-using System;
 
 namespace ProductManagementAPI.Controllers;
 
@@ -34,7 +35,6 @@ public class ProductoController : ControllerBase
         }
         catch (Exception ex)
         {
-            // Aquí puedes enviar el error a un sistema de logs como Serilog, NLog, etc.
             Console.Error.WriteLine($"[ERROR] {DateTime.Now}: {ex.Message}");
 
             return StatusCode(500, new
@@ -55,9 +55,9 @@ public class ProductoController : ControllerBase
             var productos = await _context.Productos
                 .FromSqlRaw("EXEC sp_ObtenerProductoPorId @Id = {0}", id)
                 .AsNoTracking()
-                .ToListAsync(); // Ejecutamos la consulta aquí
+                .ToListAsync();
 
-            var producto = productos.FirstOrDefault(); // Lo filtramos en memoria
+            var producto = productos.FirstOrDefault();
 
             if (producto == null)
                 return NotFound(new { mensaje = "Producto no encontrado." });
@@ -80,125 +80,115 @@ public class ProductoController : ControllerBase
 
     // POST: api/Producto
     [HttpPost]
-    public async Task<IActionResult> PostProducto([FromBody] ProductoCreateDto dto)
+    public async Task<ActionResult> CrearProducto([FromBody] ProductoCreateDto dto)
     {
         if (!ModelState.IsValid)
             return BadRequest(ModelState);
 
-        if (dto.Stock < 0)
-            return BadRequest(new { mensaje = "El stock no puede ser negativo." });
-
         try
         {
-            int nuevoId;
-
-            using (var connection = _context.Database.GetDbConnection())
+            var parametros = new[]
             {
-                await connection.OpenAsync();
+            new SqlParameter("@Nombre", dto.Nombre),
+            new SqlParameter("@Descripcion", (object?)dto.Descripcion ?? DBNull.Value),
+            new SqlParameter("@Precio", dto.Precio),
+            new SqlParameter("@Stock", dto.Stock)
+        };
 
-                using (var command = connection.CreateCommand())
-                {
-                    command.CommandText = "sp_InsertarProducto";
-                    command.CommandType = System.Data.CommandType.StoredProcedure;
+            await _context.Database.ExecuteSqlRawAsync(
+                "EXEC sp_InsertarProducto @Nombre, @Descripcion, @Precio, @Stock",
+                parametros
+            );
 
-                    // Parámetros de entrada
-                    var pNombre = command.CreateParameter();
-                    pNombre.ParameterName = "@Nombre";
-                    pNombre.Value = dto.Nombre;
-                    command.Parameters.Add(pNombre);
-
-                    var pDescripcion = command.CreateParameter();
-                    pDescripcion.ParameterName = "@Descripcion";
-                    pDescripcion.Value = dto.Descripcion;
-                    command.Parameters.Add(pDescripcion);
-
-                    var pPrecio = command.CreateParameter();
-                    pPrecio.ParameterName = "@Precio";
-                    pPrecio.Value = dto.Precio;
-                    command.Parameters.Add(pPrecio);
-
-                    var pStock = command.CreateParameter();
-                    pStock.ParameterName = "@Stock";
-                    pStock.Value = dto.Stock;
-                    command.Parameters.Add(pStock);
-
-                    // Parámetro de salida (ID generado)
-                    var pId = command.CreateParameter();
-                    pId.ParameterName = "@NuevoId";
-                    pId.Direction = System.Data.ParameterDirection.Output;
-                    pId.DbType = System.Data.DbType.Int32;
-                    command.Parameters.Add(pId);
-
-                    await command.ExecuteNonQueryAsync();
-                    nuevoId = (int)pId.Value;
-                }
-            }
-
-            return CreatedAtAction(nameof(GetProducto), new { id = nuevoId }, new
-            {
-                id = nuevoId,
-                dto.Nombre,
-                dto.Descripcion,
-                dto.Precio,
-                dto.Stock
-            });
+            return Ok(new { mensaje = "Producto creado exitosamente." });
+        }
+        catch (SqlException ex)
+        {
+            return StatusCode(500, new { mensaje = "Error en la base de datos.", detalle = ex.Message });
         }
         catch (Exception ex)
         {
-            Console.Error.WriteLine($"[ERROR - PostProducto] {DateTime.Now}: {ex.Message}");
-            return StatusCode(500, new
-            {
-                mensaje = "Ocurrió un error al insertar el producto.",
-                detalle = ex.Message
-            });
+            return StatusCode(500, new { mensaje = "Ocurrió un error inesperado.", detalle = ex.Message });
         }
     }
+
 
 
 
     // PUT: api/Producto/5
-    [HttpPut("{id}")]
-    public async Task<IActionResult> PutProducto(int id, [FromBody] ProductoUpdateDto dto)
+    [HttpPut("{id:int}")]
+    public async Task<ActionResult> ActualizarProducto(int id, [FromBody] ProductoUpdateDto dto)
     {
-        if (!ModelState.IsValid)
-            return BadRequest(ModelState);
+        try
+        {
+            var productoActual = await _context.Productos.FirstOrDefaultAsync(p => p.Id == id);
+            if (productoActual == null)
+                return NotFound(new { mensaje = "Producto no encontrado." });
 
-        if (dto.Stock < 0)
-            return BadRequest(new { mensaje = "El stock no puede ser negativo." });
+            // Aplicar los cambios solo en el campo que se recib
+            var nombre = dto.Nombre ?? productoActual.Nombre;
+            var descripcion = dto.Descripcion ?? productoActual.Descripcion;
+            var precio = dto.Precio ?? productoActual.Precio;
+            var stock = dto.Stock ?? productoActual.Stock;
 
-        var productoExistente = await _context.Productos.FindAsync(id);
-        if (productoExistente == null)
-            return NotFound(new { mensaje = "Producto no encontrado." });
+            var parametros = new[]
+            {
+            new SqlParameter("@Id", id),
+            new SqlParameter("@Nombre", nombre),
+            new SqlParameter("@Descripcion", (object?)descripcion ?? DBNull.Value),
+            new SqlParameter("@Precio", precio),
+            new SqlParameter("@Stock", stock)
+        };
 
-        productoExistente.Nombre = dto.Nombre;
-        productoExistente.Descripcion = dto.Descripcion;
-        productoExistente.Precio = dto.Precio;
-        productoExistente.Stock = dto.Stock;
+            await _context.Database.ExecuteSqlRawAsync(
+                "EXEC sp_ActualizarProducto @Id, @Nombre, @Descripcion, @Precio, @Stock",
+                parametros
+            );
 
-        _context.Productos.Add(productoExistente);
-        await _context.SaveChangesAsync();
-
-        return Ok(new { mensaje = "Producto actualizado correctamente." });
+            return Ok(new { mensaje = "Producto actualizado exitosamente." });
+        }
+        catch (SqlException ex)
+        {
+            return StatusCode(500, new { mensaje = "Error en la base de datos.", detalle = ex.Message });
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new { mensaje = "Ocurrió un error inesperado.", detalle = ex.Message });
+        }
     }
+
 
 
 
     // DELETE: api/Producto/5
-    [HttpDelete("{id}")]
+    [HttpDelete("{id:int}")]
     public async Task<IActionResult> DeleteProducto(int id)
     {
-        var producto = await _context.Productos.FindAsync(id);
-        if (producto == null)
-            return NotFound(new { mensaje = "Producto no encontrado." });
+        try
+        {
+            var existe = await _context.Productos.AnyAsync(p => p.Id == id);
+            if (!existe)
+                return NotFound(new { mensaje = "Producto no encontrado." });
 
-        _context.Productos.Remove(producto);
-        await _context.SaveChangesAsync();
+            var parametros = new[]
+            {
+            new SqlParameter("@Id", id)
+        };
 
-        return Ok(new { mensaje = "Producto eliminado correctamente." });
-    }
+            await _context.Database.ExecuteSqlRawAsync(
+                "EXEC sp_EliminarProducto @Id",
+                parametros
+            );
 
-    private bool ProductoExists(int id)
-    {
-        return _context.Productos.Any(e => e.Id == id);
+            return Ok(new { mensaje = "Producto eliminado correctamente." });
+        }
+        catch (SqlException ex)
+        {
+            return StatusCode(500, new { mensaje = "Error en la base de datos.", detalle = ex.Message });
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new { mensaje = "Ocurrió un error inesperado.", detalle = ex.Message });
+        }
     }
 }

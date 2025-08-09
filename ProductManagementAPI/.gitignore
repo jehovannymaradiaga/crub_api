@@ -1,6 +1,12 @@
+# Archivos temporales de Visual Studio
 .vs/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+*.db
+*.vsidx
 
+# Archivos temporales de compilación
 bin/
 obj/
-*.user
-*.suo
